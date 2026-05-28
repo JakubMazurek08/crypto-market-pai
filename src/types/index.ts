@@ -65,3 +65,73 @@ export interface Trade {
   totalUSD: number;
   timestamp: number;
 }
+
+// ---- Backend / Auth ----
+
+export interface User {
+  id: string;
+  email: string;
+  passwordHash: string;
+  createdAt: number;
+}
+
+export interface Portfolio {
+  userId: string;
+  cashUSD: number;
+  holdings: Record<string, Holding>;
+}
+
+export interface UserTransactions {
+  userId: string;
+  trades: Trade[];
+}
+
+// ---- API Request Types ----
+
+export interface RegisterRequest {
+  email: string;
+  password: string;
+}
+
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface BuyRequest {
+  coinId: string;
+  symbol: string;
+  name: string;
+  image: string;
+  priceUSD: number;
+  amountUSD: number;
+}
+
+export interface SellRequest {
+  coinId: string;
+  symbol: string;
+  name: string;
+  priceUSD: number;
+  quantityCoins: number;
+}
+
+// ---- API Response Types ----
+
+export interface AuthResponse {
+  success: boolean;
+  user?: { id: string; email: string };
+  error?: string;
+}
+
+export interface PortfolioResponse {
+  cashUSD: number;
+  holdings: Record<string, Holding>;
+  trades: Trade[];
+}
+
+export interface TradeResponse {
+  success: boolean;
+  trade?: Trade;
+  portfolio?: { cashUSD: number; holdings: Record<string, Holding> };
+  error?: string;
+}

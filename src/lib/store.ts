@@ -2,15 +2,33 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { nanoid } from 'nanoid';
 import type { Holding, Trade } from '@/types';
 
 const STARTING_CASH = 10_000;
 
+interface AuthUser {
+  id: string;
+  email: string;
+}
+
 interface PortfolioState {
+  // Auth state
+  user: AuthUser | null;
+  isAuthenticated: boolean;
+  authLoading: boolean;
+
+  // Portfolio state
   cashUSD: number;
   holdings: Record<string, Holding>;
   trades: Trade[];
+
+  // Auth actions
+  register: (email: string, password: string) => Promise<string | null>;
+  login: (email: string, password: string) => Promise<string | null>;
+  logout: () => Promise<void>;
+  checkAuth: () => Promise<void>;
+
+  // Trade actions (now calls API)
   buy: (
     coinId: string,
     symbol: string,
@@ -18,97 +36,198 @@ interface PortfolioState {
     image: string,
     priceUSD: number,
     amountUSD: number
-  ) => string | null; // returns error string or null on success
+  ) => Promise<string | null>;
   sell: (
     coinId: string,
     symbol: string,
     name: string,
     priceUSD: number,
     quantityCoins: number
-  ) => string | null;
+  ) => Promise<string | null>;
+
+  // Portfolio sync
+  fetchPortfolio: () => Promise<void>;
   reset: () => void;
 }
 
 export const usePortfolio = create<PortfolioState>()(
   persist(
     (set, get) => ({
+      // Initial state
+      user: null,
+      isAuthenticated: false,
+      authLoading: true,
       cashUSD: STARTING_CASH,
       holdings: {},
       trades: [],
 
-      buy(coinId, symbol, name, image, priceUSD, amountUSD) {
-        const { cashUSD, holdings } = get();
-        if (amountUSD <= 0) return 'Amount must be positive';
-        if (amountUSD > cashUSD) return 'Insufficient funds';
+      // ---- Auth actions ----
 
-        const quantity = amountUSD / priceUSD;
-        const existing = holdings[coinId];
+      async register(email, password) {
+        try {
+          const res = await fetch('/api/auth/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password }),
+          });
+          const data = await res.json();
 
-        const newHolding: Holding = existing
-          ? {
-              ...existing,
-              quantity: existing.quantity + quantity,
-              avgBuyPrice:
-                (existing.avgBuyPrice * existing.quantity + amountUSD) /
-                (existing.quantity + quantity),
-            }
-          : { coinId, symbol, name, image, quantity, avgBuyPrice: priceUSD };
+          if (!data.success) return data.error || 'Registration failed';
 
-        const trade: Trade = {
-          id: nanoid(),
-          type: 'buy',
-          coinId,
-          symbol,
-          name,
-          quantity,
-          priceUSD,
-          totalUSD: amountUSD,
-          timestamp: Date.now(),
-        };
+          set({
+            user: data.user,
+            isAuthenticated: true,
+            authLoading: false,
+          });
 
-        set({
-          cashUSD: cashUSD - amountUSD,
-          holdings: { ...holdings, [coinId]: newHolding },
-          trades: [trade, ...get().trades],
-        });
-        return null;
+          // Fetch portfolio after register
+          await get().fetchPortfolio();
+          return null;
+        } catch {
+          return 'Network error';
+        }
       },
 
-      sell(coinId, symbol, name, priceUSD, quantityCoins) {
-        const { cashUSD, holdings } = get();
-        const holding = holdings[coinId];
-        if (!holding) return 'No position to sell';
-        if (quantityCoins <= 0) return 'Quantity must be positive';
-        if (quantityCoins > holding.quantity) return 'Insufficient holdings';
+      async login(email, password) {
+        try {
+          const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password }),
+          });
+          const data = await res.json();
 
-        const totalUSD = quantityCoins * priceUSD;
-        const newQuantity = holding.quantity - quantityCoins;
-        const newHoldings = { ...holdings };
+          if (!data.success) return data.error || 'Login failed';
 
-        if (newQuantity < 1e-10) {
-          delete newHoldings[coinId];
-        } else {
-          newHoldings[coinId] = { ...holding, quantity: newQuantity };
+          set({
+            user: data.user,
+            isAuthenticated: true,
+            authLoading: false,
+          });
+
+          // Fetch portfolio after login
+          await get().fetchPortfolio();
+          return null;
+        } catch {
+          return 'Network error';
         }
+      },
 
-        const trade: Trade = {
-          id: nanoid(),
-          type: 'sell',
-          coinId,
-          symbol,
-          name,
-          quantity: quantityCoins,
-          priceUSD,
-          totalUSD,
-          timestamp: Date.now(),
-        };
-
+      async logout() {
+        try {
+          await fetch('/api/auth/logout', { method: 'POST' });
+        } catch {
+          // Ignore logout errors
+        }
         set({
-          cashUSD: cashUSD + totalUSD,
-          holdings: newHoldings,
-          trades: [trade, ...get().trades],
+          user: null,
+          isAuthenticated: false,
+          authLoading: false,
+          cashUSD: STARTING_CASH,
+          holdings: {},
+          trades: [],
         });
-        return null;
+      },
+
+      async checkAuth() {
+        try {
+          const res = await fetch('/api/auth/me');
+          const data = await res.json();
+
+          if (data.success && data.user) {
+            set({
+              user: data.user,
+              isAuthenticated: true,
+              authLoading: false,
+            });
+            await get().fetchPortfolio();
+          } else {
+            set({
+              user: null,
+              isAuthenticated: false,
+              authLoading: false,
+            });
+          }
+        } catch {
+          set({
+            user: null,
+            isAuthenticated: false,
+            authLoading: false,
+          });
+        }
+      },
+
+      // ---- Trade actions (API-backed) ----
+
+      async buy(coinId, symbol, name, image, priceUSD, amountUSD) {
+        if (!get().isAuthenticated) return 'Please log in to trade';
+
+        try {
+          const res = await fetch('/api/trade/buy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ coinId, symbol, name, image, priceUSD, amountUSD }),
+          });
+          const data = await res.json();
+
+          if (!data.success) return data.error || 'Buy failed';
+
+          // Update local state from server response
+          set({
+            cashUSD: data.portfolio.cashUSD,
+            holdings: data.portfolio.holdings,
+            trades: [data.trade, ...get().trades],
+          });
+
+          return null;
+        } catch {
+          return 'Network error';
+        }
+      },
+
+      async sell(coinId, symbol, name, priceUSD, quantityCoins) {
+        if (!get().isAuthenticated) return 'Please log in to trade';
+
+        try {
+          const res = await fetch('/api/trade/sell', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ coinId, symbol, name, priceUSD, quantityCoins }),
+          });
+          const data = await res.json();
+
+          if (!data.success) return data.error || 'Sell failed';
+
+          // Update local state from server response
+          set({
+            cashUSD: data.portfolio.cashUSD,
+            holdings: data.portfolio.holdings,
+            trades: [data.trade, ...get().trades],
+          });
+
+          return null;
+        } catch {
+          return 'Network error';
+        }
+      },
+
+      // ---- Portfolio sync ----
+
+      async fetchPortfolio() {
+        try {
+          const res = await fetch('/api/portfolio');
+          const data = await res.json();
+
+          if (data.cashUSD !== undefined) {
+            set({
+              cashUSD: data.cashUSD,
+              holdings: data.holdings || {},
+              trades: data.trades || [],
+            });
+          }
+        } catch {
+          // Silently fail — cached data will be shown
+        }
       },
 
       reset() {
@@ -117,6 +236,14 @@ export const usePortfolio = create<PortfolioState>()(
     }),
     {
       name: 'cryptoview-portfolio',
+      // Only persist auth + portfolio state, not loading flags
+      partialize: (state) => ({
+        user: state.user,
+        isAuthenticated: state.isAuthenticated,
+        cashUSD: state.cashUSD,
+        holdings: state.holdings,
+        trades: state.trades,
+      }),
     }
   )
 );

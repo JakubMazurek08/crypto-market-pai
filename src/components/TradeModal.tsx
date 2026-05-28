@@ -56,16 +56,16 @@ export default function TradeModal({
     return usdAmount / currentPrice;
   }, [inputMode, coinInput, usdAmount, currentPrice]);
 
-  function handleBuy() {
-    const err = buy(coinId, coinSymbol, coinName, coinImage, currentPrice, usdAmount);
+  async function handleBuy() {
+    const err = await buy(coinId, coinSymbol, coinName, coinImage, currentPrice, usdAmount);
     if (err) { toast.error(err); return; }
     toast.success(`Bought ${formatCoinAmount(coinAmount)} ${coinSymbol.toUpperCase()} for ${formatUSD(usdAmount)}`);
     setUsdInput(''); setCoinInput('');
     onOpenChange(false);
   }
 
-  function handleSell() {
-    const err = sell(coinId, coinSymbol, coinName, currentPrice, coinAmount);
+  async function handleSell() {
+    const err = await sell(coinId, coinSymbol, coinName, currentPrice, coinAmount);
     if (err) { toast.error(err); return; }
     toast.success(`Sold ${formatCoinAmount(coinAmount)} ${coinSymbol.toUpperCase()} for ${formatUSD(usdAmount)}`);
     setUsdInput(''); setCoinInput('');
